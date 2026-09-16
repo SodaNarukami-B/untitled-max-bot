@@ -1,70 +1,21 @@
 from __future__ import annotations
 from fastapi import FastAPI, Request, HTTPException
+import newMessage as new_msg
+from conf import CONFIG
 import uvicorn
 
+from pathlib import Path
+import json
+
+# ----------------- APP, WEBHOOK -------------------------
 app = FastAPI()
 
-supported_types = ["newMessage", "callbackQuery"]
-supported_commands = ["/echo"];
-
-class Text_Command:
-    def __init__(self, command: str, params: list[str]):
-        self.command = command
-        self.params = params
-
-    @classmethod
-    def parse(cls, raw_text: str) -> Text_Command:
-        separated = raw_text.strip().split()
-
-        if not separated:
-            return cls(command="", params=[])
-
-        return cls(command=separated[0], params=separated[1:])
-
-
-def handle_newMessage(data: dict) -> dict | int:
-    # Paylaod
-    payload = data.get("payload")
-    if not isinstance(payload, dict):
-        return 1  # User mistake / invalid structure
-
-    # Dicts with chat_id and user_id
-    chat = payload.get("chat")
-    frm = payload.get("from")
-
-    # Message text
-    text = payload.get("text")
-
-    if not isinstance(chat, dict) or not isinstance(frm, dict) or not text:
-        return 1
-
-    # Requied fields
-    chat_id = chat.get("chatId")
-    user_id = frm.get("userId") # XXX: I don't think we need it
-
-    if not chat_id or not user_id:
-        return 1
-
-
-    # Command parsing
-    command = Text_Command.parse(text)
-    if not command.command:
-        return 1
-
-    if command.command not in supported_commands:
-        return 1;
-
-    match command.command:
-        case "/echo":  # Echo
-            return {
-                "chatId": chat_id,
-                "text": " ".join(command.params)
-            }
-        case _:
-            return 2
-
+# endpoint "/core"
 @app.post("/core")
+# Catches EVERY request, sended to this endpoint
 async def handle_webhook(request: Request):
+
+    # Parsing request as json
     try:
         data = await request.json()
         if not isinstance(data, dict):
@@ -73,13 +24,17 @@ async def handle_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid data")
 
+    # Parsing json as MAX message
+
     # Type check
     event_type = data.get("type")
+    # We not need to check if event type not exists, because that will be checked in (match event_type)
 
-    # route by type
+    # Picking fucntions depending type
     match event_type:
+        # New Message (just message)
         case "newMessage":
-            response = handle_newMessage(data)
+            response = new_msg.handle_newMessage(data)
 
             if response == 1:
                 raise HTTPException(status_code=400, detail="Invalid syntax")
@@ -88,6 +43,7 @@ async def handle_webhook(request: Request):
 
             return response
 
+        # Callback Query (button pressed or another actions)
         case "callbackQuery":
             return {"status": "ok"}
 
@@ -97,3 +53,4 @@ async def handle_webhook(request: Request):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8080)
+
