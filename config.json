@@ -1,7 +1,0 @@
-{
-  "supported": {
-    "types": ["newMessage", "calbackQuery"],
-    "commands": ["/echo"]
-  }
-}
-

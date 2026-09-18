@@ -1,9 +1,0 @@
-version: '3.8'
-
-services:
-  bot-core:
-    build: .
-    container_name: max_bot_core
-    ports:
-      - "8080:8080" # Маппинг портов: [Порт на вашем ПК] : [Порт внутри контейнера]
-    restart: always
