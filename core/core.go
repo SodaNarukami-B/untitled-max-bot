@@ -1,3 +1,4 @@
+// XXX: rewrite needed
 package main
 
 /* INFO: About double connection
@@ -10,9 +11,9 @@ that we better use that than not use
 */
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"bot/utils"
 	maxbot "github.com/max-messenger/max-bot-api-client-go"
 	schemes "github.com/max-messenger/max-bot-api-client-go/schemes"
 )
@@ -32,14 +34,27 @@ type Command struct {
 
 type MessageCU_handler func(http.ResponseWriter, *http.Request, *maxbot.Api, schemes.MessageCreatedUpdate)
 
-// ------------------------ Configuraiton --------------------------
-// TODO: move to config file or (recomended) flags
-const HOST = ""
-const SECRET = ""
-const TOKEN = ""
-
 // --------------------- Main ----------------------------
 func main() {
+
+	HOST := flag.String("host", "https://your-domain.com", "Pass here your HTTPS domain")
+	SECRET := flag.String("secret", "0", "Pass here your secret")
+	TOKEN := flag.String("token", "0", "Pass here your bot token")
+	// API_CONNECTION_TRIES := flag.Int("api_connection_tries", 10, "Ammout of tries to connect to api")
+
+	flag.Parse()
+
+	log_secret := *SECRET
+	if len(*SECRET) > 10 {
+		log_secret = log_secret[:10] + "..."
+	}
+
+	log_token := *TOKEN
+	if len(*TOKEN) > 10 {
+		log_token = log_token[:10] + "..."
+	}
+
+	fmt.Printf("\nSTARTING WITH:\n- HOST: %v\n- SECRET: %v\n- TOKEN: %v\n\n", *HOST, log_secret, log_token)
 
 	// INFO: tables contains function for supported commands.
 
@@ -49,23 +64,26 @@ func main() {
 	}
 
 	// Get MAX api enviroment
-	api, err := maxbot.New(os.Getenv(TOKEN))
+	// TODO: make repeats
+
+	api, err := maxbot.New(os.Getenv(*TOKEN))
 
 	if err != nil {
-		log.Printf("Failed to connect to API")
-		return
+		log.Printf("Failed to connect to API: %v", err)
+		// FIXME: here MUST be return
 	}
 
-	// ----------------------- WEBHOOK SETUP --------------------------------------
-	// ------------------------- WEBHOOK ENDPOINT --------------------------------------
+	// ------------------------- ENDPOINTS --------------------------------------
 
 	start_time := time.Now()
 
+	// http.HandleFunc do not stops code, in fact function just SAVES callable for certain endpoint
 	http.HandleFunc("/webhook", func(resw http.ResponseWriter, req *http.Request) {
 
 		// ----------- Webhook window for webhook setup ---------------------
 		if time.Since(start_time) < 30*time.Second {
 			resw.WriteHeader(http.StatusOK)
+			log.Print("+ webhook challenge")
 			return
 		}
 
@@ -92,7 +110,7 @@ func main() {
 
 			if err != nil { // NOT COMMAND
 				resw.WriteHeader(http.StatusBadRequest)
-				go maxapi_send_MCU(api, upd, "Invalid request. Command expected.")
+				go utils.Maxapi_send_MCU(api, upd, "Invalid request. Command expected.")
 
 				return
 			}
@@ -102,7 +120,7 @@ func main() {
 
 			if !ok {
 				resw.WriteHeader(http.StatusNotFound)
-				go maxapi_send_MCU(api, upd, "Command not found")
+				go utils.Maxapi_send_MCU(api, upd, "Command not found")
 
 				return
 			}
@@ -114,24 +132,21 @@ func main() {
 		// --------------------------- Unknown mathod ----------------------------------
 		default:
 			resw.WriteHeader(http.StatusNotFound)
-			go maxapi_send_MCU(api, upd, "Unsupported action")
+			go utils.Maxapi_send_MCU(api, upd, "Unsupported action")
 
 			return
 		}
 	})
 
-	// Starting server on background
+	// -------------------------- Starting server on background ------------------------
 	go func() {
-		// starting server
-		if err := http.ListenAndServe("0.0.0.0:8080", nil); err != nil {
-			log.Fatalf("Failed to start server: %v", err)
-		}
-
+		log.Fatal(http.ListenAndServe(":8081", nil))
 	}()
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond) // short pause
 
 	// ---------------------------- WEBHOOK SETUP ----------------------------------------
+
 	client := http.Client{
 		Timeout: 10 * time.Second,
 	}
@@ -146,7 +161,7 @@ func main() {
 	}
 
 	// Setup headers
-	req.Header.Add("Authorization", TOKEN)
+	req.Header.Add("Authorization", *TOKEN)
 	req.Header.Add("Content-Type", "application/json")
 
 	// Sending
@@ -182,22 +197,6 @@ func parse_command(text string) (*Command, error) {
 	return &Command{name: cmd, args: args}, nil
 }
 
-// ----------------- Message Created Update -----------------------------------------
-
-func maxapi_send_MCU(api *maxbot.Api, upd schemes.MessageCreatedUpdate, text string) int {
-
-	nul_ctx := context.Background()
-
-	err := api.Messages.Send(nul_ctx, maxbot.NewMessage().SetChat(upd.Message.Recipient.ChatId).SetText(text))
-
-	if err != nil {
-		log.Printf("Failed to call api.Messages.Send()")
-		return -1
-	}
-
-	return 0
-}
-
 /*
  INFO: Small documentation for handler functions
 
@@ -212,8 +211,3 @@ Note: handler function CANNOT finalize/send http response, so you MUST finalize 
 
 Note2: if handler function not using req or resw, you MUST still accept all of them
 */
-
-func handle_echo(resw http.ResponseWriter, req *http.Request, api *maxbot.Api, upd schemes.MessageCreatedUpdate) {
-	resw.WriteHeader(http.StatusOK)
-	go maxapi_send_MCU(api, upd, upd.Message.Body.Text)
-}
