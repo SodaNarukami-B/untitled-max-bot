@@ -8,16 +8,14 @@ import (
 	schemes "github.com/max-messenger/max-bot-api-client-go/schemes"
 )
 
-func Maxapi_send_MCU(api *maxbot.Api, upd schemes.MessageCreatedUpdate, text string) int {
+func Send_new_message(api *maxbot.Api, msg *schemes.Message, text string) error {
 
-	nul_ctx := context.Background()
+	nil_ctx := context.TODO()
 
-	err := api.Messages.Send(nul_ctx, maxbot.NewMessage().SetChat(upd.Message.Recipient.ChatId).SetText(text))
-
-	if err != nil {
-		log.Printf("Failed to call api.Messages.Send(): %v", err)
-		return -1
+	if err := api.Messages.Send(nil_ctx, maxbot.NewMessage().SetChat(msg.Recipient.ChatId).SetText(text)); err != nil {
+		log.Printf("Failed to send message to %v: %v\n", msg.Recipient.ChatId, err)
+		return err
 	}
 
-	return 0
+	return nil
 }

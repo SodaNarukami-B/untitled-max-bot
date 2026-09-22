@@ -8,7 +8,7 @@ import (
 	schemes "github.com/max-messenger/max-bot-api-client-go/schemes"
 )
 
-func handle_echo(resw http.ResponseWriter, req *http.Request, api *maxbot.Api, upd schemes.MessageCreatedUpdate) {
+func handle_echo(resw http.ResponseWriter, req *http.Request, api *maxbot.Api, msg *schemes.Message) {
 	resw.WriteHeader(http.StatusOK)
-	go utils.Maxapi_send_MCU(api, upd, upd.Message.Body.Text)
+	go utils.Send_new_message(api, msg, msg.Body.Text)
 }

@@ -1,14 +1,4 @@
-// XXX: rewrite needed
 package main
-
-/* INFO: About double connection
-
-Max api uses double connect. First connection using for telling server that you received packet.
-Second connection using for sending messages
-
-Note: sending messages MUST be in goroutine, idk how works original max api package, so i think
-that we better use that than not use
-*/
 
 import (
 	"encoding/json"
@@ -17,197 +7,165 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"bot/utils"
+
 	maxbot "github.com/max-messenger/max-bot-api-client-go"
 	schemes "github.com/max-messenger/max-bot-api-client-go/schemes"
 )
 
-// ----------------- Structures ------------------------
+// TYPES
 type Command struct {
 	name string
 	args []string
 }
 
-type MessageCU_handler func(http.ResponseWriter, *http.Request, *maxbot.Api, schemes.MessageCreatedUpdate)
+type text_command_handler func(http.ResponseWriter, *http.Request, *maxbot.Api, *schemes.Message)
 
-// --------------------- Main ----------------------------
 func main() {
-
-	HOST := flag.String("host", "https://your-domain.com", "Pass here your HTTPS domain")
-	SECRET := flag.String("secret", "0", "Pass here your secret")
-	TOKEN := flag.String("token", "0", "Pass here your bot token")
-	// API_CONNECTION_TRIES := flag.Int("api_connection_tries", 10, "Ammout of tries to connect to api")
+	HOST := flag.String("host", "", "")
+	TOKEN := flag.String("token", "", "")
+	SECRET := flag.String("secret", "", "")
 
 	flag.Parse()
 
-	log_secret := *SECRET
-	if len(*SECRET) > 10 {
-		log_secret = log_secret[:10] + "..."
-	}
-
-	log_token := *TOKEN
-	if len(*TOKEN) > 10 {
-		log_token = log_token[:10] + "..."
-	}
-
-	fmt.Printf("\nSTARTING WITH:\n- HOST: %v\n- SECRET: %v\n- TOKEN: %v\n\n", *HOST, log_secret, log_token)
-
-	// INFO: tables contains function for supported commands.
-
-	// Tables
-	var MessageCU_command_table = map[string]MessageCU_handler{
+	text_command_table := map[string]text_command_handler{
 		"echo": handle_echo,
 	}
 
-	// Get MAX api enviroment
-	// TODO: make repeats
-
-	api, err := maxbot.New(os.Getenv(*TOKEN))
+	// Api connection
+	api, err := maxbot.New(*TOKEN)
 
 	if err != nil {
-		log.Printf("Failed to connect to API: %v", err)
-		// FIXME: here MUST be return
+		log.Fatalf("Filed to connect to api: %v", err)
+		return
 	}
-
-	// ------------------------- ENDPOINTS --------------------------------------
 
 	start_time := time.Now()
 
-	// http.HandleFunc do not stops code, in fact function just SAVES callable for certain endpoint
 	http.HandleFunc("/webhook", func(resw http.ResponseWriter, req *http.Request) {
 
-		// ----------- Webhook window for webhook setup ---------------------
 		if time.Since(start_time) < 30*time.Second {
 			resw.WriteHeader(http.StatusOK)
 			log.Print("+ webhook challenge")
 			return
 		}
 
-		// --------------- Main webhook logic ----------------------
-
+		// At this moment we can parse only post requests
 		if req.Method != http.MethodPost {
-			http.Error(resw, "Method not supported", http.StatusMethodNotAllowed)
+			resw.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
 
-		var upd schemes.MessageCreatedUpdate
+		// Here MUST be secret verification
 
-		if err := json.NewDecoder(req.Body).Decode(&upd); err != nil {
-			log.Printf("Failed to parse: %v", err)
+		// todo: search for max header structure in wireshark after you win first tour
+
+		// Searching for method
+
+		var msg schemes.MessageCreatedUpdate
+
+		if json.NewDecoder(req.Body).Decode(&msg) != nil {
+			resw.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
-		// UPDATE TYPE HANDLING
-		switch upd.UpdateType {
-		// ---------------------------- Message Created ----------------------------
+		// Parings received method
+		switch msg.UpdateType {
 		case schemes.TypeMessageCreated:
-			raw_text := upd.Message.Body.Text
-			command, err := parse_command(raw_text)
+			{
+				// MessageCreated can be used only for text command as analog for callback
+				// Command parsing
+				raw_text := msg.Message.Body.Text
+				comm, err := parse_command(raw_text)
 
-			if err != nil { // NOT COMMAND
-				resw.WriteHeader(http.StatusBadRequest)
-				go utils.Maxapi_send_MCU(api, upd, "Invalid request. Command expected.")
+				if err != nil {
+					resw.WriteHeader(http.StatusBadRequest)
+					go utils.Send_new_message(api, &msg.Message, "I undestand commands only")
+					return
+				}
+
+				// Handling command
+
+				command_handler := text_command_table[comm.name]
+				if command_handler == nil {
+					resw.WriteHeader(http.StatusNotImplemented)
+					go utils.Send_new_message(api, &msg.Message, "I don't know this command")
+					return
+				}
+
+				command_handler(resw, req, api, &msg.Message)
 
 				return
 			}
-
-			// COMMAND HANDLING
-			handler, ok := MessageCU_command_table[command.name]
-
-			if !ok {
-				resw.WriteHeader(http.StatusNotFound)
-				go utils.Maxapi_send_MCU(api, upd, "Command not found")
-
-				return
-			}
-
-			handler(resw, req, api, upd)
-
-			return
-
-		// --------------------------- Unknown mathod ----------------------------------
 		default:
-			resw.WriteHeader(http.StatusNotFound)
-			go utils.Maxapi_send_MCU(api, upd, "Unsupported action")
-
-			return
+			{
+				resw.WriteHeader(http.StatusNotImplemented)
+				go utils.Send_new_message(api, &msg.Message, "I can't answer on this action")
+				return
+			}
 		}
 	})
 
-	// -------------------------- Starting server on background ------------------------
 	go func() {
-		log.Fatal(http.ListenAndServe(":8081", nil))
+		log.Fatal(http.ListenAndServe(":8080", nil))
 	}()
 
-	time.Sleep(200 * time.Millisecond) // short pause
+	time.Sleep(1 * time.Second)
 
-	// ---------------------------- WEBHOOK SETUP ----------------------------------------
-
+	// Webhook subscribe
 	client := http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: 250 * time.Millisecond,
 	}
 
-	data := fmt.Sprintf(`{"url": "%v", "update_types": ["message_create"], "secret": "%v"}`, HOST, SECRET)
+	data := fmt.Sprintf(`{"url": %v, "update_types": ["message_created"], "secret": %v"}`, HOST, SECRET)
+	req, _ := http.NewRequest("POST", "https://platform-api2.max.ru", strings.NewReader(data))
 
-	// Creating request structure
-	req, err := http.NewRequest(http.MethodPost, "https://platform-api2.max.ru/subscriptions", strings.NewReader(data))
-	if err != nil {
-		log.Fatalf("Failed to create new request for webhook setup")
-		return
-	}
-
-	// Setup headers
 	req.Header.Add("Authorization", *TOKEN)
 	req.Header.Add("Content-Type", "application/json")
 
-	// Sending
 	resp, err := client.Do(req)
-
 	if err != nil {
-		log.Fatalf("Failed to setup webhook: %v", err)
+		log.Fatalf("Failed to complete webhook subscription: %v\n", err)
 		return
 	}
 
-	defer resp.Body.Close()
+	success := resp.Header.Get("success")
 
-	// XXX: make stop channel via signal.Notify. Do not use that:
+	if success == "" || success == "false" {
+		log.Fatal("Failed to complete webhook subscription: subscription denied/error")
+		return
+	}
+
+	log.Print("Subscripted to webhook")
+
+	// XXX: Make exit channel
 	select {}
 }
 
-// ------------------------ Command parsing function ------------------------------------
 func parse_command(text string) (*Command, error) {
-	if len(text) == 0 || text[0] != '/' { // Checks if text isn't a command
-		return nil, errors.New("Received non-command string")
-	}
-
-	// "/command agr1 arg2" >> { "command": "command", "args": ["arg1", "arg2"] }
-
-	parts := strings.Fields(text)
-	if len(parts) == 0 {
+	if len(text) == 0 {
 		return nil, errors.New("Empty command")
 	}
 
-	cmd := strings.TrimPrefix(parts[0], "/")
-	args := parts[1:]
+	if text[0] != '/' {
+		return nil, errors.New("Not a command")
+	}
 
-	return &Command{name: cmd, args: args}, nil
+	parts := strings.Fields(text)
+
+	comm := strings.TrimPrefix(parts[0], "/")
+
+	var args []string
+
+	if len(parts) > 1 {
+		args = parts[1:]
+	}
+
+	return &Command{
+		name: comm,
+		args: args,
+	}, nil
 }
-
-/*
- INFO: Small documentation for handler functions
-
-Handler fucntions takes response counstructing after main webhook handler gets command name.
-For example, when webhook handler see that command name is "echo", it calls special functtion like "handle echo".
-That special fucntion parsing command argumets, counstucts http headers and sends message to user's chat.
-
-For example "handle_echo" takes responseWriter, request, api and update message. It write OK status header, sends
-message to user and return.
-
-Note: handler function CANNOT finalize/send http response, so you MUST finalize it yourself
-
-Note2: if handler function not using req or resw, you MUST still accept all of them
-*/
