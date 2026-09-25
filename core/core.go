@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"bot/utils"
@@ -59,7 +62,12 @@ func main() {
 			return
 		}
 
-		// Here MUST be secret verification
+		secret := req.Header.Get("secret")
+
+		if secret == "" || secret != *SECRET {
+			resw.WriteHeader(http.StatusForbidden)
+			return
+		}
 
 		// todo: search for max header structure in wireshark after you win first tour
 
@@ -121,7 +129,7 @@ func main() {
 	}
 
 	data := fmt.Sprintf(`{"url": %v, "update_types": ["message_created"], "secret": %v"}`, HOST, SECRET)
-	req, _ := http.NewRequest("POST", "https://platform-api2.max.ru", strings.NewReader(data))
+	req, _ := http.NewRequest("POST", "https://platform-api2.max.ru/subscription", strings.NewReader(data))
 
 	req.Header.Add("Authorization", *TOKEN)
 	req.Header.Add("Content-Type", "application/json")
@@ -141,8 +149,14 @@ func main() {
 
 	log.Print("Subscripted to webhook")
 
-	// XXX: Make exit channel
-	select {}
+	// Exit endpoint
+	exit := make(chan os.Signal, 1)
+
+	signal.Notify(exit, os.Interrupt, syscall.SIGTERM)
+
+	<-exit
+
+	fmt.Print("Exiting...")
 }
 
 func parse_command(text string) (*Command, error) {
